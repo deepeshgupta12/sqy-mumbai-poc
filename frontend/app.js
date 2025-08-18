@@ -1,6 +1,6 @@
-/* SquareYards – Mumbai POC (stable choropleth + click UX + projects animation)
-   Fixes:
-   - line-dasharray now uses ['literal', [a,b]] to avoid v3 evaluate error
+/* SquareYards – Mumbai POC (stable choropleth + click UX + projects animation + project hover card)
+   Fixes kept:
+   - line-dasharray uses ['literal', [a,b]] (avoids v3 evaluate error)
    - choropleth guard: ['number',['feature-state','value'],-9999] + neutral band
    - re-apply choropleth on deselect to hydrate newly loaded tiles
 */
@@ -192,6 +192,78 @@
         },
         layout:{ 'visibility':'none' }
       });
+
+      /* ---------- Project hover popup (image + name + status + lat/lng) ---------- */
+      let projectHoverPopup = null;
+      let lastProjectHoverId = null;
+
+      function buildProjectHoverHTML(f) {
+        const p = f.properties || {};
+        const name   = p.ProjectName || p.projectname || 'Project';
+        const status = p.Status || p.projectstatus || '—';
+
+        let lon = null, lat = null;
+        if (f.geometry && f.geometry.type === 'Point' && Array.isArray(f.geometry.coordinates)) {
+          lon = Number(f.geometry.coordinates[0]);
+          lat = Number(f.geometry.coordinates[1]);
+        }
+        const latTxt = (lat != null && isFinite(lat)) ? lat.toFixed(6) : '—';
+        const lonTxt = (lon != null && isFinite(lon)) ? lon.toFixed(6) : '—';
+
+        // Use a JPG/PNG placeholder (avoid SVGs for WebGL contexts)
+        const imgURL = './assets/img/project-placeholder.jpg';
+
+        return `
+          <div style="width:260px">
+            <div style="font-weight:600;margin-bottom:6px">${name}</div>
+            <img src="${imgURL}" alt="project" style="width:100%;height:auto;border-radius:6px;margin-bottom:6px"/>
+            <div style="font-size:12px;color:#374151"><b>Status:</b> ${status}</div>
+            <div style="font-size:12px;color:#374151"><b>Lat:</b> ${latTxt} &nbsp; <b>Lng:</b> ${lonTxt}</div>
+          </div>
+        `;
+      }
+
+      map.on('mouseenter', 'projects-point', () => {
+        map.getCanvas().style.cursor = 'pointer';
+      });
+
+      map.on('mouseleave', 'projects-point', () => {
+        map.getCanvas().style.cursor = '';
+        if (projectHoverPopup) { projectHoverPopup.remove(); projectHoverPopup = null; }
+        lastProjectHoverId = null;
+      });
+
+      map.on('mousemove', 'projects-point', (e) => {
+        if (!e.features || !e.features.length) return;
+        const f = e.features[0];
+        if (!f) return;
+
+        // If still on same feature, just move popup
+        if (lastProjectHoverId === f.id) {
+          if (projectHoverPopup) projectHoverPopup.setLngLat(e.lngLat);
+          return;
+        }
+        lastProjectHoverId = f.id;
+
+        const html = buildProjectHoverHTML(f);
+
+        let lngLat = e.lngLat;
+        if (f.geometry && f.geometry.type === 'Point' && Array.isArray(f.geometry.coordinates)) {
+          lngLat = { lng: Number(f.geometry.coordinates[0]), lat: Number(f.geometry.coordinates[1]) };
+        }
+
+        if (projectHoverPopup) projectHoverPopup.remove();
+        projectHoverPopup = new mapboxgl.Popup({
+            closeButton: false,
+            closeOnClick: false,
+            offset: [0, 10],
+            maxWidth: '280px'
+          })
+          .setLngLat(lngLat)
+          .setHTML(html)
+          .addTo(map);
+      });
+      /* -------------------------------------------------------------------------- */
     }
 
     try {
@@ -226,7 +298,6 @@
       renderLegend(stops, isDark, fmt);
 
       const layerName = cfg.sourceLayers.localities;
-      // set only known ids; others will fall to neutral band
       for (const d of arr) {
         const targetId = castId(d.id);
         map.setFeatureState({ source:'localities', sourceLayer: layerName, id: targetId }, { value: Number(d.value) });
@@ -459,7 +530,7 @@
       const v = e.target.checked ? 'visible' : 'none';
       if (map.getLayer('projects-point')) map.setLayoutProperty('projects-point', 'visibility', v);
       if (!e.target.checked && map.getLayer('projects-point')) map.setFilter('projects-point', null);
-      if (!e.target.checked) clearProjectCard();
+      if (!e.target.checked) { /* also hide hover if open */ }
     });
 
     ui.apply.addEventListener('click', applyChoropleth);
