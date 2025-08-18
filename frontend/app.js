@@ -1,8 +1,13 @@
 /* SquareYards – Mumbai POC (stable choropleth + click UX + projects animation + project hover card)
-   Fixes kept:
+   Deselect behavior:
+   - Deselecting a clicked locality clears BOTH locality & micromarket filters,
+     restores full-city choropleth, and hides all projects.
+   - Clicking outside also clears selection/filters and hides projects.
+
+   Engine fixes kept:
    - line-dasharray uses ['literal', [a,b]] (avoids v3 evaluate error)
    - choropleth guard: ['number',['feature-state','value'],-9999] + neutral band
-   - re-apply choropleth on deselect to hydrate newly loaded tiles
+   - re-apply choropleth after filter changes to hydrate newly visible tiles
 */
 
 (async function () {
@@ -11,11 +16,13 @@
     bhk: [], assets: [], city: null, micromarkets: [], localities: []
   })));
 
+  // token + paths
   mapboxgl.accessToken = (cfg.mapboxToken || '').toString().replace(/[\s\u00A0]/g, '');
   const dataRoot = cfg.dataRoot.startsWith('/')
     ? cfg.dataRoot
     : '/' + cfg.dataRoot.replace(/^\.\//, '').replace(/^\.\.\//, '');
 
+  // map init
   const center = dims.city?.center || [72.8777, 19.0760];
   const zoom   = dims.city?.zoom   || 10;
 
@@ -32,6 +39,7 @@
     }
   });
 
+  // ui
   const ui = {
     metric:  document.getElementById('metric'),
     month:   document.getElementById('month'),
@@ -48,6 +56,7 @@
     tProjects: document.getElementById('toggle-projects')
   };
 
+  // populate dropdowns
   if (dims.assets?.length) ui.asset.innerHTML = dims.assets.map(a => `<option value="${a.code}">${a.label || a.code}</option>`).join('');
   if (dims.bhk?.length)    ui.bhk.innerHTML   = dims.bhk.map(b => `<option value="${b.code}">${b.label || b.code}</option>`).join('');
   if (dims.micromarkets?.length && ui.mm)
@@ -55,6 +64,7 @@
   if (dims.localities?.length && ui.loc)
     ui.loc.innerHTML = '<option value="">All Localities</option>' + dims.localities.map(l => `<option value="${l.id}">${l.name}</option>`).join('');
 
+  // defaults
   if (cfg.default) {
     if (cfg.default.metric) ui.metric.value = cfg.default.metric;
     if (cfg.default.month)  ui.month.value  = cfg.default.month;
@@ -64,6 +74,7 @@
   if (ui.theme) ui.theme.value = 'day';
   if (ui.tProjects) { ui.tProjects.checked = false; ui.tProjects.disabled = true; }
 
+  // helpers
   const fmtINR = v => v == null ? '—' : '₹ ' + Intl.NumberFormat('en-IN').format(v);
   const fmtPct = v => v == null ? '—' : v.toFixed(2) + '%';
 
@@ -82,7 +93,7 @@
   const CASING_COLOR_DARK  = 'rgba(255,255,255,0.55)';
 
   function paintExpression(stops, isDark) {
-    // Guard: neutral band at -9999 makes “no value” draw grey, without null warnings.
+    // neutral band for “no value”
     const neutral = isDark ? '#374151' : '#d1d5db';
     const colors  = isDark ? PALETTE_DARK : PALETTE_LIGHT;
 
@@ -97,7 +108,6 @@
   function renderLegend(stops, isDark, formatter) {
     const colors = isDark ? PALETTE_DARK : PALETTE_LIGHT;
     ui.legend.innerHTML = '';
-    // skip the neutral (-9999) band; only render quantiles
     for (let i = 0; i < stops.length - 1; i++) {
       const sw = document.createElement('div');
       sw.className = 'legend-swatch';
@@ -110,16 +120,19 @@
     }
   }
 
+  // ---- state ----
   const sel = { mm: '', loc: '' };
   let featureIdType = 'number';
   let ID_KEY   = 'LocalityID';
   let NAME_KEY = 'LocalityName';
   let selectedId = null;
   let isDark = false;
+  let projectHoverPopup = null; // so we can close it on deselect
 
   const castId = id => (featureIdType === 'number' ? Number(id) : String(id));
   const projLocExpr = (idStr) => ['==', ['to-string', ['coalesce', ['get','LocalityID'], ['get','sublocationid']]], String(idStr)];
 
+  // map load
   map.on('load', async () => {
     if (map.setConfig) map.setConfig({ lightPreset: 'day', colorScheme: 'light', show3dBuildings: true });
     isDark = false;
@@ -193,8 +206,7 @@
         layout:{ 'visibility':'none' }
       });
 
-      /* ---------- Project hover popup (image + name + status + lat/lng) ---------- */
-      let projectHoverPopup = null;
+      // ---------- Project hover popup (image + name + status + lat/lng) ----------
       let lastProjectHoverId = null;
 
       function buildProjectHoverHTML(f) {
@@ -210,7 +222,7 @@
         const latTxt = (lat != null && isFinite(lat)) ? lat.toFixed(6) : '—';
         const lonTxt = (lon != null && isFinite(lon)) ? lon.toFixed(6) : '—';
 
-        // Use a JPG/PNG placeholder (avoid SVGs for WebGL contexts)
+        // place this file in /assets/img/ (PNG or JPG)
         const imgURL = './assets/img/project-placeholder.jpg';
 
         return `
@@ -238,7 +250,6 @@
         const f = e.features[0];
         if (!f) return;
 
-        // If still on same feature, just move popup
         if (lastProjectHoverId === f.id) {
           if (projectHoverPopup) projectHoverPopup.setLngLat(e.lngLat);
           return;
@@ -263,9 +274,10 @@
           .setHTML(html)
           .addTo(map);
       });
-      /* -------------------------------------------------------------------------- */
+      // --------------------------------------------------------------------------
     }
 
+    // detect id fields
     try {
       const sample = map.querySourceFeatures('localities', { sourceLayer: cfg.sourceLayers.localities })[0];
       if (sample) {
@@ -277,6 +289,7 @@
       }
     } catch {}
 
+    // choropleth
     async function applyChoropleth() {
       const metric = ui.metric.value, month = ui.month.value, asset = ui.asset.value, bhk = ui.bhk.value;
       const url = `${dataRoot}/choropleth/${metric}/${month}/${asset}/${bhk}.json`;
@@ -308,6 +321,7 @@
       map.setPaintProperty('localities-labels', 'text-color', isDark ? '#e5e7eb' : '#111827');
     }
 
+    // filters (MM/Locality + projects)
     function setSelectionFilters() {
       if (sel.loc) {
         const id = castId(sel.loc);
@@ -352,6 +366,24 @@
       }
     }
 
+    // hide all projects + disable checkbox + close any hover/card
+    function hideProjectsAll() {
+      if (cfg.sourceLayers.projects && map.getLayer('projects-point')) {
+        map.setLayoutProperty('projects-point', 'visibility', 'none');
+        map.setFilter('projects-point', null);
+      }
+      if (ui.tProjects) {
+        ui.tProjects.checked = false;
+        ui.tProjects.disabled = true;
+      }
+      if (projectHoverPopup) {
+        projectHoverPopup.remove();
+        projectHoverPopup = null;
+      }
+      clearProjectCard();
+    }
+
+    // fit
     async function fitToSelection() {
       const feats = map.queryRenderedFeatures({ layers: ['localities-fill'] });
       if (!feats.length) return;
@@ -365,11 +397,12 @@
       if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 40, maxZoom: 14 });
     }
 
+    // dropdown listeners
     ui.mm?.addEventListener('change', async () => {
       sel.mm = ui.mm.value || ''; sel.loc = ''; if (ui.loc) ui.loc.value = '';
       setSelectionFilters(); await fitToSelection();
       ui.stats.textContent = 'Click a locality to see details here.'; clearProjectCard();
-      await applyChoropleth(); // refresh visible tiles’ states
+      await applyChoropleth();
     });
     ui.loc?.addEventListener('change', async () => {
       sel.loc = ui.loc.value || '';
@@ -377,11 +410,13 @@
       await applyChoropleth();
     });
 
+    // feature-state: selected flag
     function setLocalitySelected(id, on) {
       const layerName = cfg.sourceLayers.localities;
       map.setFeatureState({ source:'localities', sourceLayer: layerName, id: castId(id) }, { selected: !!on });
     }
 
+    // project pulse animation on select
     function animateProjectsForLocality(locId) {
       if (!cfg.sourceLayers.projects || !map.getLayer('projects-point')) return;
       const start = performance.now();
@@ -401,6 +436,7 @@
       requestAnimationFrame(frame);
     }
 
+    // right-card helpers
     function ensureProjectCard() {
       let card = document.getElementById('proj-card');
       if (!card) {
@@ -415,6 +451,7 @@
     }
     function clearProjectCard() { const el = document.getElementById('proj-card'); if (el) el.remove(); }
 
+    // locality click
     async function onClickLocality(e) {
       const feats = map.queryRenderedFeatures(e.point, { layers: ['localities-fill'] });
       if (!feats.length) return;
@@ -426,13 +463,19 @@
         || `Locality ${locId}`;
       if (locId == null) return;
 
-      // toggle deselect if clicking the same again
+      // deselect if clicking same again -> clear BOTH filters + hide projects + restore city choropleth
       if (selectedId != null && String(selectedId) === String(locId)) {
         setLocalitySelected(selectedId, false);
-        selectedId = null; sel.loc = ''; if (ui.loc) ui.loc.value = '';
+        selectedId = null;
+
+        sel.loc = ''; if (ui.loc) ui.loc.value = '';
+        sel.mm  = ''; if (ui.mm)  ui.mm.value  = '';
+
+        hideProjectsAll();
         setSelectionFilters();
-        ui.stats.textContent = 'Click a locality to see details here.'; clearProjectCard();
-        await applyChoropleth(); // <- restore visible tile states
+
+        ui.stats.textContent = 'Click a locality to see details here.';
+        await applyChoropleth();
         return;
       }
 
@@ -475,6 +518,7 @@
       }
     }
 
+    // project click -> add metrics card below locality card
     function onClickProject(e) {
       const feats = map.queryRenderedFeatures(e.point, { layers: ['projects-point'] });
       if (!feats.length) return;
@@ -506,18 +550,31 @@
     map.on('click', 'localities-fill', onClickLocality);
     if (cfg.sourceLayers.projects) map.on('click', 'projects-point', onClickProject);
 
-    map.on('click', (e) => {
+    // click outside -> clear selection and BOTH filters + hide projects + restore choropleth
+    map.on('click', async (e) => {
       const onLoc  = map.queryRenderedFeatures(e.point, { layers:['localities-fill'] }).length > 0;
-      const onProj = cfg.sourceLayers.projects && map.queryRenderedFeatures(e.point, { layers:['projects-point'] }).length > 0;
+      const onProj = cfg.sourceLayers.projects &&
+                     map.queryRenderedFeatures(e.point, { layers:['projects-point'] }).length > 0;
+
       if (!onLoc && !onProj && selectedId != null) {
         setLocalitySelected(selectedId, false);
-        selectedId = null; sel.loc = ''; if (ui.loc) ui.loc.value = '';
-        setSelectionFilters(); ui.stats.textContent = 'Click a locality to see details here.'; clearProjectCard();
-        ui.apply.click(); // re-hydrate any tiles we just revealed
+        selectedId = null;
+
+        sel.loc = ''; if (ui.loc) ui.loc.value = '';
+        sel.mm  = ''; if (ui.mm) ui.mm.value  = '';
+
+        hideProjectsAll();
+        setSelectionFilters();
+
+        ui.stats.textContent = 'Click a locality to see details here.';
+        await applyChoropleth();
       }
     });
-    window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { map.fire('click', { point:{x:-1,y:-1}, lngLat: map.getCenter() }); } });
+    window.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') { map.fire('click', { point:{x:-1,y:-1}, lngLat: map.getCenter() }); }
+    });
 
+    // layer toggles
     ui.tMM?.addEventListener('change', e => {
       const v = e.target.checked ? 'visible' : 'none';
       ['mm-outline-casing','mm-outline','mm-labels'].forEach(id => map.getLayer(id)&&map.setLayoutProperty(id,'visibility',v));
@@ -530,13 +587,16 @@
       const v = e.target.checked ? 'visible' : 'none';
       if (map.getLayer('projects-point')) map.setLayoutProperty('projects-point', 'visibility', v);
       if (!e.target.checked && map.getLayer('projects-point')) map.setFilter('projects-point', null);
-      if (!e.target.checked) { /* also hide hover if open */ }
+      if (!e.target.checked && projectHoverPopup) { projectHoverPopup.remove(); projectHoverPopup = null; }
+      if (!e.target.checked) clearProjectCard();
     });
 
+    // apply button
     ui.apply.addEventListener('click', applyChoropleth);
     await applyChoropleth();
   });
 
+  // debug helper
   window._sqy = {
     cfg, dims, map, sel,
     pingChoropleth: () => {
