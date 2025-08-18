@@ -1,0 +1,11 @@
+ProjecttypeId,ProjectTypeCode,ProjectTypeName
+1,HR,High Rise Apartment (more than 10 floors)
+2,LR,Low Rise Apartment(less than equal to 5 floors)
+3,MR,Medium Rise Apartments(between 6 to 10 floors)
+4,BF,Builder Floor
+5,VL,Villas
+6,CO,Combination
+7,PL,Plotted Development
+8,CM,Commercial
+9,TW,Townhouse
+,,

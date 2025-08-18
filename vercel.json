@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "trailingSlash": false,
+  "rewrites": [
+    { "source": "/", "destination": "/frontend/" }
+  ],
+  "headers": [
+    {
+      "source": "/data/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400" },
+        { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+      ]
+    }
+  ]
+}

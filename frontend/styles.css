@@ -1,0 +1,10 @@
+html, body { margin:0; height:100%; font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;}
+#map { position:absolute; top:56px; bottom:0; left:0; right:340px; }
+.topbar { position:fixed; top:0; left:0; right:0; height:56px; background:#0f172a; color:#fff; display:flex; align-items:center; padding:0 12px; gap:16px; z-index:10;}
+.controls label { margin-right:12px; font-size:14px;}
+.controls select, .controls input { margin-left:6px; padding:4px 6px; border-radius:6px; border:1px solid #334155;}
+.controls button { margin-left:8px; padding:6px 10px; border:0; border-radius:8px; background:#22c55e; color:#041016; cursor:pointer;}
+#panel { position:absolute; top:56px; right:0; width:340px; bottom:0; border-left:1px solid #e5e7eb; background:#fff; overflow:auto; }
+#panel-content { padding:14px;}
+#legend { margin-left:auto; display:flex; gap:6px; align-items:center; }
+.legend-swatch { width:20px; height:12px; border-radius:3px; border:1px solid rgba(0,0,0,0.2); }

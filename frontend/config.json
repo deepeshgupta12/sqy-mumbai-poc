@@ -1,0 +1,28 @@
+{
+  "mapboxToken": "pk.eyJ1IjoiZGVlcGVzaGd1cHRhMTIiLCJhIjoiY21lYjVvMzZ0MGlpcTJrcXYwcHExOTBleSJ9.GwetZ3xfKCeTFr-Fn_zKKQ",
+
+  "tilesets": {
+    "localities":   "mapbox://deepeshgupta12.ast3zvrs",
+    "micromarkets": "mapbox://deepeshgupta12.1ahnnxm9",
+    "roads":        "mapbox://deepeshgupta12.40y1pbvk",
+    "projects":     "mapbox://deepeshgupta12.8b0p6ktz",
+    "city":         "mapbox://deepeshgupta12.brbm4b4a"
+  },
+
+  "sourceLayers": {
+    "localities":   "mumbai_localities",
+    "micromarkets": "mumbai_micro_markets",
+    "roads":        "mumbai_roads",
+    "projects":     "mumbai_projects",
+    "city":         "mumbai_city"
+  },
+
+  "dataRoot": "data/out",
+
+  "default": {
+    "metric": "yield",
+    "month": "2025-07",
+    "asset": "Residential",
+    "bhk": "2"
+  }
+}

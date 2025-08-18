@@ -1,0 +1,15 @@
+{
+  "month": "2025-07",
+  "asset": "Residential",
+  "bhk": "3",
+  "locality_id": 32361,
+  "median_asking": 10591806.0,
+  "median_registered": 9847668.0,
+  "median_rent": 35910.0,
+  "yield": 0.04375858325036953,
+  "counts": {
+    "asking": 73,
+    "registered": 83,
+    "rent": 23
+  }
+}
