@@ -2,186 +2,136 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>SquareYards – Mumbai POC</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SquareYards Mumbai POC</title>
 
   <!-- Mapbox GL JS v3 (required for Standard style + setConfig) -->
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" />
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
 
   <style>
-    :root {
-      --bg: #f8fafc;         /* slate-50 */
-      --panel: #ffffff;      /* white */
-      --border: #e5e7eb;     /* gray-200 */
-      --text: #111827;       /* gray-900 */
-      --muted: #475569;      /* slate-600 */
-      --accent: #3b82f6;     /* blue-500 */
+    html, body { height:100%; margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background:#fff; }
+    #topbar {
+      position: absolute; top: 8px; left: 8px; right: 360px; z-index: 10;
+      background: rgba(255,255,255,0.92); backdrop-filter: saturate(180%) blur(6px);
+      border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 10px 6px 10px;
+      box-shadow: 0 6px 18px rgba(0,0,0,.06);
+      display: grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap: 8px; align-items: center;
     }
-    * { box-sizing: border-box; }
-    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
-                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, "Noto Sans"; }
+    #topbar .field { display:flex; gap:6px; align-items:center; }
+    #topbar label { font-size:12px; color:#374151; }
+    #topbar select, #topbar button { height:28px; font-size:12px; padding:2px 6px; }
+    #apply { background:#2563eb; color:#fff; border:0; border-radius:6px; padding:4px 10px; cursor:pointer; }
+    #apply:hover { filter: brightness(1.04); }
 
-    .layout {
-      position: fixed; inset: 0;
-      display: grid;
-      grid-template-rows: auto 1fr;
-      grid-template-columns: 1fr;
-    }
+    #toggles { grid-column: span 12; display:flex; align-items:center; gap:14px; margin-top:4px; }
+    #toggles label { font-size:12px; color:#111827; }
 
-    /* Top controls bar */
-    .controls {
-      display: flex; flex-wrap: wrap; gap: 8px 12px;
-      align-items: center;
-      padding: 10px 12px;
-      background: var(--panel);
-      border-bottom: 1px solid var(--border);
-      z-index: 5;
-    }
-    .controls .group {
-      display: flex; align-items: center; gap: 6px;
-      background: #fff;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 6px 8px;
-    }
-    .controls label { font-size: 12px; color: var(--muted); }
-    .controls select, .controls button {
-      appearance: none;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: #fff;
-      padding: 6px 8px;
-      font-size: 13px; color: var(--text);
-    }
-    .controls button {
-      border-color: var(--accent);
-      background: var(--accent);
-      color: #fff; cursor: pointer;
-    }
-    .controls .toggles { display: flex; align-items: center; gap: 14px; padding: 6px 10px; }
-    .controls .toggles label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
+    #densityWrap { display:flex; align-items:center; gap:10px; }
+    #statusWrap { display:flex; align-items:center; gap:6px; }
+    #status { height:28px; font-size:12px; }
 
-    /* Map area */
-    #map { width: 100%; height: 100%; position: relative; }
+    #map { position: absolute; inset: 0 360px 0 0; }
+    #right {
+      position: absolute; top:8px; right:8px; bottom:8px; width: 340px; z-index:9;
+      display:flex; flex-direction:column; gap:10px;
+    }
+    .panel {
+      background: rgba(255,255,255,0.94); border:1px solid #e5e7eb; border-radius:10px; padding:10px;
+      box-shadow: 0 6px 18px rgba(0,0,0,.06);
+    }
+    #legend { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:12px; color:#374151; }
+    .legend-swatch { width:16px; height:10px; border-radius:2px; border:1px solid #e5e7eb; display:inline-block; }
 
-    /* Legend */
-    #legend {
-      position: fixed; left: 12px; bottom: 12px;
-      background: var(--panel); border: 1px solid var(--border);
-      border-radius: 12px; padding: 8px 10px;
-      box-shadow: 0 10px 18px rgba(0,0,0,0.06);
-      display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px;
-      max-width: 50%;
-      z-index: 4;
+    /* small badge buttons for status counts */
+    .status-badge {
+      display:inline-flex; align-items:center; gap:6px;
+      background:#f3f4f6; border:1px solid #e5e7eb; color:#111827;
+      border-radius:999px; padding:3px 8px; font-size:12px; margin-right:6px; margin-bottom:6px;
     }
-    .legend-swatch {
-      width: 16px; height: 12px; border-radius: 3px;
-      border: 1px solid var(--border);
-      display: inline-block;
-    }
-
-    /* Right stats panel */
-    .stats-panel {
-      position: fixed; right: 12px; top: 72px; /* below header */
-      width: 300px; max-width: calc(100% - 24px);
-      background: var(--panel); border: 1px solid var(--border);
-      border-radius: 14px; padding: 12px;
-      box-shadow: 0 10px 18px rgba(0,0,0,0.06);
-      z-index: 4;
-    }
-    #stats { font-size: 14px; line-height: 1.35; }
-    #stats hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+    .status-dot { width:8px; height:8px; border-radius:999px; display:inline-block; }
+    .dot-rtm { background:#16a34a; }           /* Ready to Move */
+    .dot-uc  { background:#f59e0b; }           /* Under Construction */
+    .dot-nl  { background:#8b5cf6; }           /* New Launch (example) */
+    .dot-oth { background:#3b82f6; }           /* other */
   </style>
 </head>
 <body>
-  <div class="layout">
-    <!-- Controls bar -->
-    <div class="controls">
-      <div class="group">
-        <label for="metric">Metric</label>
-        <select id="metric">
-          <option value="yield">Yield</option>
-          <option value="asking">Asking</option>
-          <option value="registered">Registered</option>
-          <option value="rent">Rent</option>
-        </select>
-      </div>
-
-      <div class="group">
-        <label for="month">Month</label>
-        <select id="month">
-          <option value="2025-07">2025-07</option>
-          <option value="2025-06">2025-06</option>
-          <option value="2025-05">2025-05</option>
-        </select>
-      </div>
-
-      <div class="group">
-        <label for="asset">Asset</label>
-        <select id="asset">
-          <!-- app.js will populate from dims.json if present -->
-          <option value="Residential">Residential</option>
-        </select>
-      </div>
-
-      <div class="group">
-        <label for="bhk">BHK</label>
-        <select id="bhk">
-          <!-- app.js will populate from dims.json if present -->
-          <option value="1">1</option>
-          <option value="2" selected>2</option>
-          <option value="3">3</option>
-        </select>
-      </div>
-
-      <!-- New: Theme selector for Mapbox Standard -->
-      <div class="group">
-        <label for="theme">Theme</label>
-        <select id="theme">
-          <option value="day" selected>Day (Standard)</option>
-          <option value="night">Night (Dark)</option>
-        </select>
-      </div>
-
-      <!-- Micromarket & Locality selectors (populated from dims.json) -->
-      <div class="group">
-        <label for="mm">Micromarket</label>
-        <select id="mm">
-          <option value="">All Micromarkets</option>
-        </select>
-      </div>
-
-      <div class="group">
-        <label for="loc">Locality</label>
-        <select id="loc">
-          <option value="">All Localities</option>
-        </select>
-      </div>
-
-      <div class="group">
-        <button id="apply">Apply</button>
-      </div>
-
-      <!-- Layer toggles -->
-      <div class="toggles">
-        <label><input type="checkbox" id="toggle-mm" checked> MM outline</label>
-        <label><input type="checkbox" id="toggle-roads" checked> Roads</label>
-        <label><input type="checkbox" id="toggle-projects" checked> Projects</label>
-      </div>
+  <!-- Controls -->
+  <div id="topbar" class="panel">
+    <div class="field" style="grid-column: span 2;">
+      <label for="metric">Metric</label>
+      <select id="metric">
+        <option value="yield">Yield</option>
+        <option value="asking">Asking</option>
+        <option value="registered">Registered</option>
+        <option value="rent">Rent</option>
+      </select>
     </div>
 
-    <!-- Map container -->
-    <div id="map"></div>
+    <div class="field" style="grid-column: span 2;">
+      <label for="month">Month</label>
+      <select id="month"></select>
+    </div>
 
-    <!-- Overlays (outside map to avoid Mapbox warning) -->
-    <div id="legend">(legend)</div>
-    <div class="stats-panel">
-      <div id="stats">Click a locality to see details here.</div>
+    <div class="field" style="grid-column: span 2;">
+      <label for="asset">Asset</label>
+      <select id="asset"></select>
+    </div>
+
+    <div class="field" style="grid-column: span 1;">
+      <label for="bhk">BHK</label>
+      <select id="bhk"></select>
+    </div>
+
+    <div class="field" style="grid-column: span 2;">
+      <label for="theme">Theme</label>
+      <select id="theme">
+        <option value="day">Day (Standard)</option>
+        <option value="night">Night</option>
+      </select>
+    </div>
+
+    <div class="field" style="grid-column: span 3;">
+      <label for="mm">Micromarket</label>
+      <select id="mm"></select>
+    </div>
+
+    <div class="field" style="grid-column: span 3;">
+      <label for="loc">Locality</label>
+      <select id="loc"></select>
+    </div>
+
+    <div class="field" style="grid-column: span 1; justify-content:flex-end">
+      <button id="apply">Apply</button>
+    </div>
+
+    <div id="toggles">
+      <label><input type="checkbox" id="toggle-mm" checked /> MM outline</label>
+      <label><input type="checkbox" id="toggle-roads" checked /> Roads</label>
+      <label><input type="checkbox" id="toggle-projects" /> Projects</label>
+
+      <div id="densityWrap">
+        <label><input type="checkbox" id="toggle-density" disabled /> Project density</label>
+        <div id="statusWrap">
+          <label for="status">Status</label>
+          <select id="status" disabled>
+            <option value="__all__">All</option>
+          </select>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- App logic -->
+  <!-- Map -->
+  <div id="map"></div>
+
+  <!-- Right panels -->
+  <div id="right">
+    <div id="stats" class="panel">Click a locality to see details here.</div>
+    <div id="legend" class="panel"></div>
+  </div>
+
   <script src="./app.js"></script>
 </body>
 </html>
