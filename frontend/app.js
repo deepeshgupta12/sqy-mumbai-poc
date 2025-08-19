@@ -1,13 +1,6 @@
-/* SquareYards – Mumbai POC (stable choropleth + click UX + projects animation + project hover card)
-   Deselect behavior:
-   - Deselecting a clicked locality clears BOTH locality & micromarket filters,
-     restores full-city choropleth, and hides all projects.
-   - Clicking outside also clears selection/filters and hides projects.
-
-   Engine fixes kept:
-   - line-dasharray uses ['literal', [a,b]] (avoids v3 evaluate error)
-   - choropleth guard: ['number',['feature-state','value'],-9999] + neutral band
-   - re-apply choropleth after filter changes to hydrate newly visible tiles
+/* SquareYards – Mumbai POC
+   + Status-aware Project Density (heatmap) per selected locality
+   + Keeps existing pins, hover popup, choropleth & deselect logic
 */
 
 (async function () {
@@ -16,13 +9,11 @@
     bhk: [], assets: [], city: null, micromarkets: [], localities: []
   })));
 
-  // token + paths
   mapboxgl.accessToken = (cfg.mapboxToken || '').toString().replace(/[\s\u00A0]/g, '');
   const dataRoot = cfg.dataRoot.startsWith('/')
     ? cfg.dataRoot
     : '/' + cfg.dataRoot.replace(/^\.\//, '').replace(/^\.\.\//, '');
 
-  // map init
   const center = dims.city?.center || [72.8777, 19.0760];
   const zoom   = dims.city?.zoom   || 10;
 
@@ -39,7 +30,7 @@
     }
   });
 
-  // ui
+  // ---------- UI refs ----------
   const ui = {
     metric:  document.getElementById('metric'),
     month:   document.getElementById('month'),
@@ -53,10 +44,11 @@
     loc:     document.getElementById('loc'),
     tMM:     document.getElementById('toggle-mm'),
     tRoads:  document.getElementById('toggle-roads'),
-    tProjects: document.getElementById('toggle-projects')
+    tProjects: document.getElementById('toggle-projects'),
+    tProjHeat: document.getElementById('toggle-project-heat') // <-- NEW
   };
 
-  // populate dropdowns
+  // Populate selects
   if (dims.assets?.length) ui.asset.innerHTML = dims.assets.map(a => `<option value="${a.code}">${a.label || a.code}</option>`).join('');
   if (dims.bhk?.length)    ui.bhk.innerHTML   = dims.bhk.map(b => `<option value="${b.code}">${b.label || b.code}</option>`).join('');
   if (dims.micromarkets?.length && ui.mm)
@@ -64,7 +56,6 @@
   if (dims.localities?.length && ui.loc)
     ui.loc.innerHTML = '<option value="">All Localities</option>' + dims.localities.map(l => `<option value="${l.id}">${l.name}</option>`).join('');
 
-  // defaults
   if (cfg.default) {
     if (cfg.default.metric) ui.metric.value = cfg.default.metric;
     if (cfg.default.month)  ui.month.value  = cfg.default.month;
@@ -73,8 +64,9 @@
   }
   if (ui.theme) ui.theme.value = 'day';
   if (ui.tProjects) { ui.tProjects.checked = false; ui.tProjects.disabled = true; }
+  if (ui.tProjHeat) { ui.tProjHeat.checked = false; ui.tProjHeat.disabled = true; }
 
-  // helpers
+  // ---------- Helpers ----------
   const fmtINR = v => v == null ? '—' : '₹ ' + Intl.NumberFormat('en-IN').format(v);
   const fmtPct = v => v == null ? '—' : v.toFixed(2) + '%';
 
@@ -93,10 +85,8 @@
   const CASING_COLOR_DARK  = 'rgba(255,255,255,0.55)';
 
   function paintExpression(stops, isDark) {
-    // neutral band for “no value”
     const neutral = isDark ? '#374151' : '#d1d5db';
     const colors  = isDark ? PALETTE_DARK : PALETTE_LIGHT;
-
     const expr = ['interpolate', ['linear'], ['number', ['feature-state','value'], -9999],
                   -9999, neutral];
     for (let i = 0; i < stops.length; i++) {
@@ -120,19 +110,20 @@
     }
   }
 
-  // ---- state ----
+  // ---- State ----
   const sel = { mm: '', loc: '' };
   let featureIdType = 'number';
   let ID_KEY   = 'LocalityID';
   let NAME_KEY = 'LocalityName';
   let selectedId = null;
   let isDark = false;
-  let projectHoverPopup = null; // so we can close it on deselect
+  let projectHoverPopup = null;
 
   const castId = id => (featureIdType === 'number' ? Number(id) : String(id));
   const projLocExpr = (idStr) => ['==', ['to-string', ['coalesce', ['get','LocalityID'], ['get','sublocationid']]], String(idStr)];
+  const projMMExpr  = (mmStr) => ['==', ['coalesce', ['to-string',['get','MicroMarketID']], '' ], String(mmStr)];
 
-  // map load
+  // ---------- Map load ----------
   map.on('load', async () => {
     if (map.setConfig) map.setConfig({ lightPreset: 'day', colorScheme: 'light', show3dBuildings: true });
     isDark = false;
@@ -145,11 +136,13 @@
 
     map.easeTo({ pitch: 60, bearing: 20, duration: 1000 });
 
+    // Sources
     map.addSource('localities',   { type:'vector', url: cfg.tilesets.localities });
     if (cfg.tilesets.micromarkets) map.addSource('micromarkets', { type:'vector', url: cfg.tilesets.micromarkets });
     if (cfg.tilesets.roads)        map.addSource('roads',        { type:'vector', url: cfg.tilesets.roads });
     if (cfg.tilesets.projects)     map.addSource('projects',     { type:'vector', url: cfg.tilesets.projects });
 
+    // Localities layers
     map.addLayer({
       id:'localities-fill', type:'fill', source:'localities', 'source-layer': cfg.sourceLayers.localities,
       paint:{ 'fill-color':'#d1d5db', 'fill-opacity':['case',['boolean',['feature-state','selected'],false],0.95,0.75] }
@@ -164,6 +157,7 @@
       paint:{ 'text-color':'#111827', 'text-halo-color':'#ffffff', 'text-halo-width':1 }
     });
 
+    // Micromarkets
     if (cfg.sourceLayers.micromarkets) {
       map.addLayer({
         id:'mm-outline-casing', type:'line', source:'micromarkets', 'source-layer': cfg.sourceLayers.micromarkets,
@@ -182,6 +176,7 @@
       });
     }
 
+    // Roads
     if (cfg.sourceLayers.roads) {
       map.addLayer({
         id:'roads-line-casing', type:'line', source:'roads', 'source-layer': cfg.sourceLayers.roads,
@@ -195,6 +190,7 @@
       });
     }
 
+    // Projects pins (kept)
     if (cfg.sourceLayers.projects) {
       map.addLayer({
         id:'projects-point', type:'circle', source:'projects', 'source-layer': cfg.sourceLayers.projects,
@@ -206,78 +202,119 @@
         layout:{ 'visibility':'none' }
       });
 
-      // ---------- Project hover popup (image + name + status + lat/lng) ----------
-      let lastProjectHoverId = null;
+      // --- NEW: Project Density Heatmaps (per status) below pins ---
+      const STATUS = ['Ready to Move','Under Construction'];
+      const STATUS_FIELD = ['coalesce', ['get','Status'], ['get','projectstatus']];
 
+      // Green ramp (RTM)
+      map.addLayer({
+        id: 'projects-heat-rtm', type: 'heatmap', source: 'projects', 'source-layer': cfg.sourceLayers.projects,
+        layout: { visibility: 'none' },
+        paint: {
+          'heatmap-weight': 1,
+          'heatmap-intensity': ['interpolate',['linear'],['zoom'], 10, 0.5, 14, 1.2],
+          'heatmap-radius': ['interpolate',['linear'],['zoom'], 10, 12, 14, 24, 16, 32],
+          'heatmap-opacity': ['interpolate',['linear'],['zoom'], 10, 0.85, 14, 0.65, 16, 0.55],
+          'heatmap-color': ['interpolate',['linear'],['heatmap-density'],
+            0,   'rgba(0,0,0,0)',
+            0.2, '#c6f6d5',
+            0.4, '#68d391',
+            0.6, '#38a169',
+            0.8, '#2f855a',
+            1.0, '#276749'
+          ]
+        },
+        filter: ['==', STATUS_FIELD, STATUS[0]]
+      }, 'projects-point');
+
+      // Orange ramp (UC)
+      map.addLayer({
+        id: 'projects-heat-uc', type: 'heatmap', source: 'projects', 'source-layer': cfg.sourceLayers.projects,
+        layout: { visibility: 'none' },
+        paint: {
+          'heatmap-weight': 1,
+          'heatmap-intensity': ['interpolate',['linear'],['zoom'], 10, 0.5, 14, 1.2],
+          'heatmap-radius': ['interpolate',['linear'],['zoom'], 10, 12, 14, 24, 16, 32],
+          'heatmap-opacity': ['interpolate',['linear'],['zoom'], 10, 0.85, 14, 0.65, 16, 0.55],
+          'heatmap-color': ['interpolate',['linear'],['heatmap-density'],
+            0,   'rgba(0,0,0,0)',
+            0.2, '#FEF3C7',
+            0.4, '#FDE68A',
+            0.6, '#FBBF24',
+            0.8, '#F59E0B',
+            1.0, '#B45309'
+          ]
+        },
+        filter: ['==', STATUS_FIELD, STATUS[1]]
+      }, 'projects-point');
+
+      // Blue ramp (Other)
+      map.addLayer({
+        id: 'projects-heat-other', type: 'heatmap', source: 'projects', 'source-layer': cfg.sourceLayers.projects,
+        layout: { visibility: 'none' },
+        paint: {
+          'heatmap-weight': 1,
+          'heatmap-intensity': ['interpolate',['linear'],['zoom'], 10, 0.5, 14, 1.2],
+          'heatmap-radius': ['interpolate',['linear'],['zoom'], 10, 12, 14, 24, 16, 32],
+          'heatmap-opacity': ['interpolate',['linear'],['zoom'], 10, 0.85, 14, 0.65, 16, 0.55],
+          'heatmap-color': ['interpolate',['linear'],['heatmap-density'],
+            0,   'rgba(0,0,0,0)',
+            0.2, '#DBEAFE',
+            0.4, '#93C5FD',
+            0.6, '#60A5FA',
+            0.8, '#3B82F6',
+            1.0, '#1D4ED8'
+          ]
+        },
+        filter: ['all',
+          ['!=', STATUS_FIELD, STATUS[0]],
+          ['!=', STATUS_FIELD, STATUS[1]]
+        ]
+      }, 'projects-point');
+
+      // Hover popup for pins (kept)
+      let lastProjectHoverId = null;
       function buildProjectHoverHTML(f) {
         const p = f.properties || {};
         const name   = p.ProjectName || p.projectname || 'Project';
         const status = p.Status || p.projectstatus || '—';
-
-        let lon = null, lat = null;
-        if (f.geometry && f.geometry.type === 'Point' && Array.isArray(f.geometry.coordinates)) {
+        let lon=null, lat=null;
+        if (f.geometry?.type === 'Point' && Array.isArray(f.geometry.coordinates)) {
           lon = Number(f.geometry.coordinates[0]);
           lat = Number(f.geometry.coordinates[1]);
         }
-        const latTxt = (lat != null && isFinite(lat)) ? lat.toFixed(6) : '—';
-        const lonTxt = (lon != null && isFinite(lon)) ? lon.toFixed(6) : '—';
-
-        // place this file in /assets/img/ (PNG or JPG)
+        const latTxt = (lat!=null && isFinite(lat)) ? lat.toFixed(6) : '—';
+        const lonTxt = (lon!=null && isFinite(lon)) ? lon.toFixed(6) : '—';
         const imgURL = './assets/img/project-placeholder.jpg';
-
         return `
           <div style="width:260px">
             <div style="font-weight:600;margin-bottom:6px">${name}</div>
             <img src="${imgURL}" alt="project" style="width:100%;height:auto;border-radius:6px;margin-bottom:6px"/>
             <div style="font-size:12px;color:#374151"><b>Status:</b> ${status}</div>
             <div style="font-size:12px;color:#374151"><b>Lat:</b> ${latTxt} &nbsp; <b>Lng:</b> ${lonTxt}</div>
-          </div>
-        `;
+          </div>`;
       }
-
-      map.on('mouseenter', 'projects-point', () => {
-        map.getCanvas().style.cursor = 'pointer';
-      });
-
+      map.on('mouseenter', 'projects-point', () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', 'projects-point', () => {
         map.getCanvas().style.cursor = '';
         if (projectHoverPopup) { projectHoverPopup.remove(); projectHoverPopup = null; }
         lastProjectHoverId = null;
       });
-
       map.on('mousemove', 'projects-point', (e) => {
-        if (!e.features || !e.features.length) return;
+        if (!e.features?.length) return;
         const f = e.features[0];
-        if (!f) return;
-
-        if (lastProjectHoverId === f.id) {
-          if (projectHoverPopup) projectHoverPopup.setLngLat(e.lngLat);
-          return;
-        }
+        if (lastProjectHoverId === f.id) { if (projectHoverPopup) projectHoverPopup.setLngLat(e.lngLat); return; }
         lastProjectHoverId = f.id;
-
         const html = buildProjectHoverHTML(f);
-
         let lngLat = e.lngLat;
-        if (f.geometry && f.geometry.type === 'Point' && Array.isArray(f.geometry.coordinates)) {
-          lngLat = { lng: Number(f.geometry.coordinates[0]), lat: Number(f.geometry.coordinates[1]) };
-        }
-
+        if (f.geometry?.type === 'Point') lngLat = { lng: Number(f.geometry.coordinates[0]), lat: Number(f.geometry.coordinates[1]) };
         if (projectHoverPopup) projectHoverPopup.remove();
-        projectHoverPopup = new mapboxgl.Popup({
-            closeButton: false,
-            closeOnClick: false,
-            offset: [0, 10],
-            maxWidth: '280px'
-          })
-          .setLngLat(lngLat)
-          .setHTML(html)
-          .addTo(map);
+        projectHoverPopup = new mapboxgl.Popup({ closeButton:false, closeOnClick:false, offset:[0,10], maxWidth:'280px' })
+          .setLngLat(lngLat).setHTML(html).addTo(map);
       });
-      // --------------------------------------------------------------------------
     }
 
-    // detect id fields
+    // Detect locality props
     try {
       const sample = map.querySourceFeatures('localities', { sourceLayer: cfg.sourceLayers.localities })[0];
       if (sample) {
@@ -285,11 +322,10 @@
         const p = sample.properties || {};
         if ('LocalityID' in p || 'LocalityName' in p) { ID_KEY='LocalityID'; NAME_KEY='LocalityName'; }
         else if ('sublocationid' in p || 'sublocationname' in p) { ID_KEY='sublocationid'; NAME_KEY='sublocationname'; }
-        console.log('[detect]', { featureIdType, ID_KEY, NAME_KEY });
       }
     } catch {}
 
-    // choropleth
+    // ---------- Choropleth ----------
     async function applyChoropleth() {
       const metric = ui.metric.value, month = ui.month.value, asset = ui.asset.value, bhk = ui.bhk.value;
       const url = `${dataRoot}/choropleth/${metric}/${month}/${asset}/${bhk}.json`;
@@ -304,7 +340,6 @@
         map.setPaintProperty('localities-fill', 'fill-color', isDark ? '#374151' : '#d1d5db');
         return;
       }
-
       const values = arr.map(d => Number(d.value)).filter(Number.isFinite);
       const stops  = colorStops(values);
       const fmt    = (metric === 'yield') ? (v => v.toFixed(2) + '%') : (v => Intl.NumberFormat('en-IN').format(v));
@@ -315,13 +350,12 @@
         const targetId = castId(d.id);
         map.setFeatureState({ source:'localities', sourceLayer: layerName, id: targetId }, { value: Number(d.value) });
       }
-
       map.setPaintProperty('localities-fill', 'fill-color', paintExpression(stops, isDark));
       map.setPaintProperty('localities-outline', 'line-color', isDark ? '#9ca3af' : '#7c7c7c');
       map.setPaintProperty('localities-labels', 'text-color', isDark ? '#e5e7eb' : '#111827');
     }
 
-    // filters (MM/Locality + projects)
+    // ---------- Filters ----------
     function setSelectionFilters() {
       if (sel.loc) {
         const id = castId(sel.loc);
@@ -341,6 +375,7 @@
         map.setFilter('localities-labels',  null);
       }
 
+      // Pins follow selection
       if (cfg.sourceLayers.projects) {
         if (sel.loc) {
           if (ui.tProjects) { ui.tProjects.disabled = false; ui.tProjects.checked = true; }
@@ -350,11 +385,7 @@
           }
         } else if (sel.mm) {
           if (ui.tProjects?.checked && map.getLayer('projects-point')) {
-            const f = ['any',
-              ['==', ['coalesce', ['to-string',['get','MicroMarketID']], '' ], String(sel.mm)],
-              ['==', ['coalesce', ['to-string',['get','locationid']],    '' ], String(sel.mm)]
-            ];
-            map.setFilter('projects-point', f);
+            map.setFilter('projects-point', projMMExpr(sel.mm));
           }
         } else {
           if (map.getLayer('projects-point')) {
@@ -364,26 +395,42 @@
           }
         }
       }
+
+      // Heatmap follows locality only
+      updateProjectHeatForLocality();
     }
 
-    // hide all projects + disable checkbox + close any hover/card
-    function hideProjectsAll() {
-      if (cfg.sourceLayers.projects && map.getLayer('projects-point')) {
-        map.setLayoutProperty('projects-point', 'visibility', 'none');
-        map.setFilter('projects-point', null);
-      }
-      if (ui.tProjects) {
-        ui.tProjects.checked = false;
-        ui.tProjects.disabled = true;
-      }
-      if (projectHoverPopup) {
-        projectHoverPopup.remove();
-        projectHoverPopup = null;
-      }
-      clearProjectCard();
+    function setLocalitySelected(id, on) {
+      const layerName = cfg.sourceLayers.localities;
+      map.setFeatureState({ source:'localities', sourceLayer: layerName, id: castId(id) }, { selected: !!on });
     }
 
-    // fit
+    // ---------- Project Heatmap controls ----------
+    function showProjectHeat(visible) {
+      ['projects-heat-rtm','projects-heat-uc','projects-heat-other'].forEach(id => {
+        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+      });
+    }
+    function hideProjectHeatAll() {
+      showProjectHeat(false);
+      if (ui.tProjHeat) { ui.tProjHeat.checked = false; ui.tProjHeat.disabled = true; }
+    }
+    function updateProjectHeatForLocality() {
+      // Only if checkbox is on and a locality is selected
+      const canShow = !!sel.loc && !!ui.tProjHeat?.checked;
+      if (!canShow) { showProjectHeat(false); return; }
+      const locFilter = projLocExpr(sel.loc);
+      const statusField = ['coalesce', ['get','Status'], ['get','projectstatus']];
+
+      if (map.getLayer('projects-heat-rtm'))   map.setFilter('projects-heat-rtm',   ['all', locFilter, ['==', statusField, 'Ready to Move']]);
+      if (map.getLayer('projects-heat-uc'))    map.setFilter('projects-heat-uc',    ['all', locFilter, ['==', statusField, 'Under Construction']]);
+      if (map.getLayer('projects-heat-other')) map.setFilter('projects-heat-other', ['all', locFilter,
+          ['!=', statusField, 'Ready to Move'], ['!=', statusField, 'Under Construction']]);
+
+      showProjectHeat(true);
+    }
+
+    // ---------- Fit helpers ----------
     async function fitToSelection() {
       const feats = map.queryRenderedFeatures({ layers: ['localities-fill'] });
       if (!feats.length) return;
@@ -397,88 +444,44 @@
       if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 40, maxZoom: 14 });
     }
 
-    // dropdown listeners
+    // ---------- Select events ----------
     ui.mm?.addEventListener('change', async () => {
       sel.mm = ui.mm.value || ''; sel.loc = ''; if (ui.loc) ui.loc.value = '';
       setSelectionFilters(); await fitToSelection();
-      ui.stats.textContent = 'Click a locality to see details here.'; clearProjectCard();
+      ui.stats.textContent = 'Click a locality to see details here.';
+      hideProjectHeatAll(); // MM change clears locality heat
       await applyChoropleth();
     });
     ui.loc?.addEventListener('change', async () => {
       sel.loc = ui.loc.value || '';
       setSelectionFilters(); await fitToSelection();
       await applyChoropleth();
+      if (sel.loc && ui.tProjHeat) ui.tProjHeat.disabled = false;
     });
 
-    // feature-state: selected flag
-    function setLocalitySelected(id, on) {
-      const layerName = cfg.sourceLayers.localities;
-      map.setFeatureState({ source:'localities', sourceLayer: layerName, id: castId(id) }, { selected: !!on });
-    }
-
-    // project pulse animation on select
-    function animateProjectsForLocality(locId) {
-      if (!cfg.sourceLayers.projects || !map.getLayer('projects-point')) return;
-      const start = performance.now();
-      const base = ['interpolate',['linear'],['zoom'], 10, 2, 14, 6, 16, 10];
-      const cond = projLocExpr(locId);
-      function frame(ts) {
-        const t = Math.min(1, (ts - start) / 450);
-        const bump = 1 + 0.35 * (1 - Math.cos(Math.PI * t));
-        const expr = ['interpolate',['linear'],['zoom'],
-          10, ['case', cond, 2 * bump, 2],
-          14, ['case', cond, 6 * bump, 6],
-          16, ['case', cond,10 * bump,10]
-        ];
-        map.setPaintProperty('projects-point', 'circle-radius', expr);
-        if (t < 1) requestAnimationFrame(frame); else map.setPaintProperty('projects-point','circle-radius', base);
-      }
-      requestAnimationFrame(frame);
-    }
-
-    // right-card helpers
-    function ensureProjectCard() {
-      let card = document.getElementById('proj-card');
-      if (!card) {
-        card = document.createElement('div');
-        card.id = 'proj-card';
-        card.style.marginTop = '10px';
-        card.style.borderTop = '1px solid #e5e7eb';
-        card.style.paddingTop = '10px';
-        ui.stats.appendChild(card);
-      }
-      return card;
-    }
-    function clearProjectCard() { const el = document.getElementById('proj-card'); if (el) el.remove(); }
-
-    // locality click
+    // Locality click (toggle select)
     async function onClickLocality(e) {
       const feats = map.queryRenderedFeatures(e.point, { layers: ['localities-fill'] });
       if (!feats.length) return;
       const f = feats[0];
-
       const locId = (f.id != null ? f.id : undefined) ??
         (f.properties ? (f.properties[ID_KEY] ?? f.properties.LocalityID ?? f.properties.sublocationid) : undefined);
       const locName = (f.properties ? (f.properties[NAME_KEY] ?? f.properties.LocalityName ?? f.properties.sublocationname) : undefined)
         || `Locality ${locId}`;
       if (locId == null) return;
 
-      // deselect if clicking same again -> clear BOTH filters + hide projects + restore city choropleth
+      // Deselect
       if (selectedId != null && String(selectedId) === String(locId)) {
         setLocalitySelected(selectedId, false);
-        selectedId = null;
-
-        sel.loc = ''; if (ui.loc) ui.loc.value = '';
-        sel.mm  = ''; if (ui.mm)  ui.mm.value  = '';
-
-        hideProjectsAll();
+        selectedId = null; sel.loc = ''; if (ui.loc) ui.loc.value = '';
         setSelectionFilters();
-
+        hideProjectHeatAll();
         ui.stats.textContent = 'Click a locality to see details here.';
         await applyChoropleth();
         return;
       }
 
+      // Select
       if (selectedId != null) setLocalitySelected(selectedId, false);
       selectedId = locId;
       setLocalitySelected(locId, true);
@@ -488,10 +491,14 @@
         const match = dims.localities.find(l => String(l.id) === String(locId));
         if (match?.microMarketId != null) { ui.mm.value = String(match.microMarketId); sel.mm = String(match.microMarketId); }
       }
-
       if (map.getZoom() < 12) await fitToSelection();
       setSelectionFilters();
 
+      // Enable the density checkbox now that a locality is chosen
+      if (ui.tProjHeat) ui.tProjHeat.disabled = false;
+      updateProjectHeatForLocality();
+
+      // Right-panel summary
       const metric = ui.metric.value, month = ui.month.value, asset = ui.asset.value, bhk = ui.bhk.value;
       const summaryUrl = `${dataRoot}/summary/${locId}/${month}/${asset}/${bhk}.json`;
       try {
@@ -508,17 +515,11 @@
           <div style="margin-top:6px; font-size:12px; color:${isDark ? '#cbd5e1' : '#475569'}">
             Samples — Asking: ${s.counts?.asking ?? '—'} • Registered: ${s.counts?.registered ?? '—'} • Rent: ${s.counts?.rent ?? '—'}
           </div>`;
-      } catch { ui.stats.textContent = 'No summary for this selection.'; }
-
-      if (cfg.sourceLayers.projects && map.getLayer('projects-point')) {
-        if (ui.tProjects) { ui.tProjects.disabled = false; ui.tProjects.checked = true; }
-        map.setLayoutProperty('projects-point', 'visibility', 'visible');
-        map.setFilter('projects-point', projLocExpr(locId));
-        animateProjectsForLocality(locId);
+      } catch {
+        ui.stats.textContent = 'No summary for this selection.';
       }
     }
 
-    // project click -> add metrics card below locality card
     function onClickProject(e) {
       const feats = map.queryRenderedFeatures(e.point, { layers: ['projects-point'] });
       if (!feats.length) return;
@@ -531,7 +532,15 @@
       fetch(`${dataRoot}/summary_project/${pid}/${ui.month.value}/${ui.asset.value}/${ui.bhk.value}.json`)
         .then(r => r.ok ? r.json() : null)
         .then(s => {
-          const card = ensureProjectCard();
+          let card = document.getElementById('proj-card');
+          if (!card) {
+            card = document.createElement('div');
+            card.id = 'proj-card';
+            card.style.marginTop = '10px';
+            card.style.borderTop = '1px solid #e5e7eb';
+            card.style.paddingTop = '10px';
+            ui.stats.appendChild(card);
+          }
           card.innerHTML = `
             <div style="font-weight:600; margin-bottom:6px;">${name}</div>
             <div style="font-size:13px; color:${isDark ? '#cbd5e1' : '#475569'}; margin-bottom:6px;">
@@ -550,31 +559,21 @@
     map.on('click', 'localities-fill', onClickLocality);
     if (cfg.sourceLayers.projects) map.on('click', 'projects-point', onClickProject);
 
-    // click outside -> clear selection and BOTH filters + hide projects + restore choropleth
-    map.on('click', async (e) => {
+    // Click outside: clear & hide all overlays (pins + heat)
+    map.on('click', (e) => {
       const onLoc  = map.queryRenderedFeatures(e.point, { layers:['localities-fill'] }).length > 0;
-      const onProj = cfg.sourceLayers.projects &&
-                     map.queryRenderedFeatures(e.point, { layers:['projects-point'] }).length > 0;
-
+      const onProj = cfg.sourceLayers.projects && map.queryRenderedFeatures(e.point, { layers:['projects-point'] }).length > 0;
       if (!onLoc && !onProj && selectedId != null) {
         setLocalitySelected(selectedId, false);
-        selectedId = null;
-
-        sel.loc = ''; if (ui.loc) ui.loc.value = '';
-        sel.mm  = ''; if (ui.mm) ui.mm.value  = '';
-
-        hideProjectsAll();
+        selectedId = null; sel.loc = ''; if (ui.loc) ui.loc.value = '';
         setSelectionFilters();
-
+        hideProjectHeatAll();
         ui.stats.textContent = 'Click a locality to see details here.';
-        await applyChoropleth();
+        ui.apply.click();
       }
     });
-    window.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Escape') { map.fire('click', { point:{x:-1,y:-1}, lngLat: map.getCenter() }); }
-    });
 
-    // layer toggles
+    // Toggles
     ui.tMM?.addEventListener('change', e => {
       const v = e.target.checked ? 'visible' : 'none';
       ['mm-outline-casing','mm-outline','mm-labels'].forEach(id => map.getLayer(id)&&map.setLayoutProperty(id,'visibility',v));
@@ -588,15 +587,22 @@
       if (map.getLayer('projects-point')) map.setLayoutProperty('projects-point', 'visibility', v);
       if (!e.target.checked && map.getLayer('projects-point')) map.setFilter('projects-point', null);
       if (!e.target.checked && projectHoverPopup) { projectHoverPopup.remove(); projectHoverPopup = null; }
-      if (!e.target.checked) clearProjectCard();
+      // Heatmap is independent; we leave it as-is (driven by tProjHeat + selection)
+    });
+    ui.tProjHeat?.addEventListener('change', () => {
+      if (!sel.loc) { // no locality selected: disable and hide
+        hideProjectHeatAll();
+        return;
+      }
+      updateProjectHeatForLocality();
     });
 
-    // apply button
+    // Apply & initial paint
     ui.apply.addEventListener('click', applyChoropleth);
     await applyChoropleth();
   });
 
-  // debug helper
+  // Debug helper
   window._sqy = {
     cfg, dims, map, sel,
     pingChoropleth: () => {
